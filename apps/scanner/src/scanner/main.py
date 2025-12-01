@@ -24,24 +24,28 @@ def main():
     
     # Run as a job
     try:
-        profiles = scanner.scan_all_tables()
-        logger.info(f"Scanned {len(profiles)} tables", extra={"table_count": len(profiles)})
+        # Scan all configured source databases
+        results = scanner.scan_source_databases()
         
-        for profile in profiles:
+        logger.info(
+            "Scanner completed",
+            extra={
+                "scanned_databases": results.get("scanned_databases", 0),
+                "failed_databases": results.get("failed_databases", 0),
+                "total_tables": results.get("total_tables", 0),
+                "status": results.get("status", "unknown")
+            }
+        )
+        
+        # Log per-database results
+        for db_result in results.get("database_results", []):
             logger.info(
-                "Table profile",
-                extra={
-                    "schema": profile["schema"],
-                    "table": profile["table"],
-                    "row_count": profile["row_count"],
-                    "column_count": profile["column_count"],
-                }
+                f"Database scan result: {db_result.get('source_db_name')}",
+                extra=db_result
             )
         
-        # Persist candidates after profiling
-        if profiles:
-            scanner.persist_candidates(profiles)
-            logger.info("✓ Candidate persistence completed")
+        if results.get("failed_databases", 0) > 0:
+            logger.warning(f"Some databases failed to scan: {results.get('failed_databases')}")
         
     except Exception as e:
         logger.error("Scanner failed", exc_info=True)

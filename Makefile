@@ -1,4 +1,4 @@
-.PHONY: up down test fmt lint clean migrate seed worker worker-dry-run setup-env
+.PHONY: up down test fmt lint clean migrate seed worker worker-dry-run scan setup-env
 
 # Default target
 .DEFAULT_GOAL := help
@@ -10,6 +10,7 @@ help:
 	@echo "  make down          - Stop all services"
 	@echo "  make migrate       - Run database migrations"
 	@echo "  make seed          - Seed demo data (10 customers, 25 events)"
+	@echo "  make scan          - Run scanner against configured source databases"
 	@echo "  make worker        - Run identity worker to process customers"
 	@echo "  make worker-dry-run - Run identity worker in dry-run mode"
 	@echo "  make test          - Run tests"
@@ -53,6 +54,11 @@ worker-dry-run:
 	@echo "Running identity worker (dry-run)..."
 	@if [ -f .env ]; then export $$(cat .env | grep -v '^#' | xargs); fi; \
 	docker compose run --rm identity-worker python -m identity_worker.main --dry-run
+
+scan:
+	@echo "Running scanner against configured source databases..."
+	@if [ -f .env ]; then export $$(cat .env | grep -v '^#' | xargs); fi; \
+	docker compose run --rm scanner
 
 test:
 	@echo "Running tests..."

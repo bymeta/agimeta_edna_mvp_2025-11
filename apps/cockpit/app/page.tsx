@@ -23,6 +23,12 @@ export default function Home() {
                 >
                   Scans
                 </Link>
+                <Link
+                  href="/databases"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Databases
+                </Link>
               </div>
             </div>
           </div>
@@ -48,6 +54,13 @@ export default function Home() {
               >
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">Scans</h3>
                 <p className="text-gray-600">View scanner run status and results</p>
+              </Link>
+              <Link
+                href="/databases"
+                className="block p-6 bg-white rounded-lg shadow hover:shadow-md transition-shadow"
+              >
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Databases</h3>
+                <p className="text-gray-600">Manage source database connections</p>
               </Link>
             </div>
           </div>

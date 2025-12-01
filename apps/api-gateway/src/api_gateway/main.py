@@ -16,6 +16,7 @@ import uvicorn
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import json
+import time
 
 import logging
 from edna_common.config import get_settings
@@ -121,6 +122,86 @@ async def healthz():
         )
 
 
+@app.post("/scan-runs")
+async def create_scan_run(payload: dict):
+    """
+    Start a new scan run for the configured demo source system.
+
+    MVP: this only creates the metadata row in scan_run; the actual scanning/matching
+    is performed by a separate job/process that picks up pending runs.
+    """
+    source_system = payload.get("source_system") or "demo-db"
+    try:
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO scan_run (source_system, status, metrics_json)
+                    VALUES (%s, 'PENDING', %s::jsonb)
+                    RETURNING scan_run_id, source_system, status, started_at, ended_at, metrics_json
+                    """,
+                    (source_system, json.dumps(payload.get("metrics", {}))),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return dict(row)
+    except psycopg2.Error:
+        logger.error("Database error creating scan_run", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred")
+    except Exception as e:
+        logger.error("Failed to create scan_run", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/scan-runs")
+async def list_scan_runs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    source_system: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+):
+    """List scan runs with basic pagination and filtering."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                base_query = "FROM scan_run WHERE 1=1"
+                params: list = []
+
+                if source_system:
+                    base_query += " AND source_system = %s"
+                    params.append(source_system)
+                if status:
+                    base_query += " AND status = %s"
+                    params.append(status)
+
+                count_query = f"SELECT COUNT(*) AS total {base_query}"
+                cur.execute(count_query, params)
+                total = cur.fetchone()["total"]
+
+                data_query = (
+                    "SELECT scan_run_id, source_system, status, started_at, ended_at, metrics_json "
+                    + base_query
+                    + " ORDER BY started_at DESC LIMIT %s OFFSET %s"
+                )
+                cur.execute(data_query, params + [limit, offset])
+                runs = [dict(r) for r in cur.fetchall()]
+
+                return {
+                    "items": runs,
+                    "count": len(runs),
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": (offset + len(runs)) < total,
+                }
+    except psycopg2.Error:
+        logger.error("Database error listing scan_runs", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred")
+    except Exception as e:
+        logger.error("Failed to list scan_runs", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/objects")
 async def list_objects(
     source_system: Optional[str] = Query(None, description="Filter by source system"),
@@ -222,6 +303,107 @@ async def list_objects(
         raise HTTPException(status_code=500, detail="Database error occurred")
     except Exception as e:
         logger.error("Failed to list objects", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/customers")
+async def list_customers(
+    country: Optional[str] = Query(None, description="Filter by country code"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of results"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
+):
+    """
+    List golden customers (MVP).
+
+    NOTE: This is a thin SQL wrapper around the MVP table `object_customer`.
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                base_query = "FROM object_customer WHERE 1=1"
+                params: list = []
+
+                if country:
+                    base_query += " AND country = %s"
+                    params.append(country)
+
+                count_query = f"SELECT COUNT(*) AS total {base_query}"
+                cur.execute(count_query, params)
+                total = cur.fetchone()["total"]
+
+                data_query = (
+                    "SELECT customer_id, name, email, tax_id, country, created_at, updated_at "
+                    + base_query
+                    + " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+                )
+                cur.execute(data_query, params + [limit, offset])
+                customers = [dict(r) for r in cur.fetchall()]
+
+                return {
+                    "items": customers,
+                    "count": len(customers),
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": (offset + len(customers)) < total,
+                }
+    except psycopg2.Error:
+        logger.error("Database error listing customers", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred")
+    except Exception as e:
+        logger.error("Failed to list customers", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/customers/{customer_id}")
+async def get_customer(customer_id: str):
+    """
+    Get a golden customer and its source links (MVP).
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT customer_id, name, email, tax_id, country, source_expr, created_at, updated_at
+                    FROM object_customer
+                    WHERE customer_id = %s
+                    """,
+                    (customer_id,),
+                )
+                customer = cur.fetchone()
+                if not customer:
+                    raise HTTPException(status_code=404, detail="Customer not found")
+
+                cur.execute(
+                    """
+                    SELECT 
+                        id,
+                        source_system,
+                        source_table,
+                        source_pk,
+                        match_rule,
+                        confidence,
+                        explanation,
+                        created_at
+                    FROM object_customer_source_link
+                    WHERE customer_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (customer_id,),
+                )
+                links = [dict(r) for r in cur.fetchall()]
+
+                result = dict(customer)
+                result["source_links"] = links
+                return result
+    except HTTPException:
+        raise
+    except psycopg2.Error:
+        logger.error("Database error getting customer", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred")
+    except Exception as e:
+        logger.error("Failed to get customer", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -391,6 +573,53 @@ async def list_events(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/kpis")
+async def list_kpis(
+    scan_run_id: Optional[str] = Query(None, description="Filter by scan_run_id"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """
+    List KPI facts for the MVP (backed by kpi_fact table).
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                base_query = "FROM kpi_fact WHERE 1=1"
+                params: list = []
+
+                if scan_run_id:
+                    base_query += " AND scan_run_id = %s"
+                    params.append(scan_run_id)
+
+                count_query = f"SELECT COUNT(*) AS total {base_query}"
+                cur.execute(count_query, params)
+                total = cur.fetchone()["total"]
+
+                data_query = (
+                    "SELECT id, kpi_key, value, scan_run_id, computed_at, details_json "
+                    + base_query
+                    + " ORDER BY computed_at DESC LIMIT %s OFFSET %s"
+                )
+                cur.execute(data_query, params + [limit, offset])
+                rows = [dict(r) for r in cur.fetchall()]
+
+                return {
+                    "items": rows,
+                    "count": len(rows),
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": (offset + len(rows)) < total,
+                }
+    except psycopg2.Error:
+        logger.error("Database error listing kpis", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred")
+    except Exception as e:
+        logger.error("Failed to list kpis", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/events")
 async def create_event(event: dict):
     """Create a new event"""
@@ -501,6 +730,318 @@ async def create_identity_rule(rule: dict):
         raise
     except Exception as e:
         logger.error("Failed to create identity rule", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/source-databases")
+async def list_source_databases(
+    active_only: bool = Query(True, description="Only return active databases")
+):
+    """List source databases configured for scanning"""
+    try:
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                query = """
+                    SELECT 
+                        source_db_id,
+                        source_db_name,
+                        description,
+                        host,
+                        port,
+                        database_name,
+                        username,
+                        schemas,
+                        table_blacklist,
+                        active,
+                        last_scan_at,
+                        last_scan_status,
+                        last_scan_error,
+                        metadata,
+                        created_at,
+                        updated_at
+                    FROM edna_source_databases
+                    WHERE 1=1
+                """
+                params = []
+                
+                if active_only:
+                    query += " AND active = TRUE"
+                
+                query += " ORDER BY source_db_name"
+                
+                cur.execute(query, params)
+                databases = []
+                for row in cur.fetchall():
+                    db = dict(row)
+                    # Don't expose password in API response
+                    if "password_encrypted" in db:
+                        del db["password_encrypted"]
+                    databases.append(db)
+                
+                return {"databases": databases, "count": len(databases)}
+    except Exception as e:
+        logger.error("Failed to list source databases", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/source-databases/{source_db_id}")
+async def get_source_database(source_db_id: str):
+    """Get a specific source database configuration"""
+    try:
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT 
+                        source_db_id,
+                        source_db_name,
+                        description,
+                        host,
+                        port,
+                        database_name,
+                        username,
+                        schemas,
+                        table_blacklist,
+                        active,
+                        last_scan_at,
+                        last_scan_status,
+                        last_scan_error,
+                        metadata,
+                        created_at,
+                        updated_at
+                    FROM edna_source_databases
+                    WHERE source_db_id = %s
+                """, (source_db_id,))
+                
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Source database not found")
+                
+                db = dict(row)
+                # Don't expose password in API response
+                if "password_encrypted" in db:
+                    del db["password_encrypted"]
+                
+                return db
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get source database", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/source-databases")
+async def create_source_database(db_config: dict):
+    """Create or update a source database configuration"""
+    try:
+        source_db_id = db_config.get("source_db_id")
+        if not source_db_id:
+            raise HTTPException(status_code=400, detail="Missing required field: source_db_id")
+        
+        # Validate required fields
+        required_fields = ["source_db_name", "host", "database_name", "username"]
+        for field in required_fields:
+            if not db_config.get(field):
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+        
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Get password from config or metadata
+                password = (
+                    db_config.get("password_encrypted")
+                    or db_config.get("password")
+                    or db_config.get("metadata", {}).get("password", "")
+                )
+
+                # Wenn wir ein bestehendes Dataset updaten und kein Passwort
+                # mitgeschickt wird, behalten wir das alte Passwort bei.
+                if not password:
+                    cur.execute(
+                        """
+                        SELECT password_encrypted
+                        FROM edna_source_databases
+                        WHERE source_db_id = %s
+                        """,
+                        (source_db_id,),
+                    )
+                    existing = cur.fetchone()
+                    if existing and existing[0]:
+                        password = existing[0]
+                
+                cur.execute("""
+                    INSERT INTO edna_source_databases (
+                        source_db_id, source_db_name, description,
+                        host, port, database_name, username, password_encrypted,
+                        schemas, table_blacklist, active, metadata
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    ON CONFLICT (source_db_id) DO UPDATE SET
+                        source_db_name = EXCLUDED.source_db_name,
+                        description = EXCLUDED.description,
+                        host = EXCLUDED.host,
+                        port = EXCLUDED.port,
+                        database_name = EXCLUDED.database_name,
+                        username = EXCLUDED.username,
+                        password_encrypted = EXCLUDED.password_encrypted,
+                        schemas = EXCLUDED.schemas,
+                        table_blacklist = EXCLUDED.table_blacklist,
+                        active = EXCLUDED.active,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = NOW()
+                    RETURNING source_db_id
+                """, (
+                    source_db_id,
+                    db_config.get("source_db_name"),
+                    db_config.get("description"),
+                    db_config.get("host"),
+                    db_config.get("port", 5432),
+                    db_config.get("database_name"),
+                    db_config.get("username"),
+                    password,
+                    db_config.get("schemas", []),
+                    db_config.get("table_blacklist", []),
+                    db_config.get("active", True),
+                    json.dumps(db_config.get("metadata", {}))
+                ))
+                conn.commit()
+                return {"source_db_id": cur.fetchone()[0], "status": "created_or_updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to create source database", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/source-databases/{source_db_id}")
+async def delete_source_database(source_db_id: str):
+    """Delete a source database configuration"""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM edna_source_databases
+                    WHERE source_db_id = %s
+                    RETURNING source_db_id
+                """, (source_db_id,))
+                
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Source database not found")
+                
+                conn.commit()
+                return {"source_db_id": source_db_id, "status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to delete source database", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/source-databases/{source_db_id}/check-connection")
+async def check_source_database_connection(source_db_id: str):
+    """Check connectivity to a configured source database"""
+    try:
+        # First, load database config from edna_source_databases
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT 
+                        source_db_id,
+                        source_db_name,
+                        host,
+                        port,
+                        database_name,
+                        username,
+                        password_encrypted,
+                        metadata
+                    FROM edna_source_databases
+                    WHERE source_db_id = %s
+                    """,
+                    (source_db_id,),
+                )
+                row = cur.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Source database not found")
+
+        db = dict(row)
+
+        # Build connection URL
+        password = db.get("password_encrypted") or (
+            (db.get("metadata") or {}).get("password") if db.get("metadata") else ""
+        )
+
+        # Allow empty password (e.g., trust/local auth)
+        username = db["username"]
+        host = db["host"]
+        port = db["port"]
+        database_name = db["database_name"]
+
+        # Sonderfall: Benutzer gibt 'localhost' oder 127.0.0.1 ein.
+        # Aus Sicht des Containers ist das NICHT der Host-Rechner, deshalb
+        # mappen wir auf host.docker.internal (per extra_hosts in docker-compose).
+        if host in ("localhost", "127.0.0.1"):
+            host = "host.docker.internal"
+
+        if password:
+            dsn = f"postgresql://{username}:{password}@{host}:{port}/{database_name}"
+        else:
+            dsn = f"postgresql://{username}@{host}:{port}/{database_name}"
+
+        # Try to connect
+        start = time.monotonic()
+        try:
+            test_conn = psycopg2.connect(dsn)
+            with test_conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            test_conn.close()
+        except psycopg2.OperationalError as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            logger.warning(
+                "Source database connection failed",
+                extra={
+                    "source_db_id": source_db_id,
+                    "source_db_name": db.get("source_db_name"),
+                    "host": host,
+                    "port": port,
+                    "database_name": database_name,
+                    "error": str(e),
+                    "latency_ms": duration_ms,
+                },
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Connection failed: {e}",
+            )
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+
+        logger.info(
+            "Source database connection successful",
+            extra={
+                "source_db_id": source_db_id,
+                "source_db_name": db.get("source_db_name"),
+                "host": host,
+                "port": port,
+                "database_name": database_name,
+                "latency_ms": duration_ms,
+            },
+        )
+
+        return {
+            "status": "success",
+            "latency_ms": duration_ms,
+            "details": {
+                "source_db_id": db.get("source_db_id"),
+                "source_db_name": db.get("source_db_name"),
+                "host": host,
+                "port": port,
+                "database_name": database_name,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to check source database connection", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

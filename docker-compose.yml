@@ -3,9 +3,9 @@ services:
     image: postgres:15-alpine
     container_name: edna-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-edna}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edna}
-      POSTGRES_DB: ${POSTGRES_DB:-edna}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
     ports:
@@ -26,12 +26,12 @@ services:
       dockerfile: apps/api-gateway/Dockerfile
     container_name: edna-api-gateway
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-edna}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edna}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB:-edna}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
       API_GATEWAY_HOST: 0.0.0.0
       API_GATEWAY_PORT: 8000
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -41,6 +41,8 @@ services:
     volumes:
       - ./infra:/app/infra:ro
       - ./scripts:/app/scripts:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,7 +56,7 @@ services:
       dockerfile: apps/scanner/Dockerfile
     container_name: edna-scanner
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
     depends_on:
@@ -62,6 +64,8 @@ services:
         condition: service_healthy
     networks:
       - edna-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: "no"  # Run as job
 
   identity:
@@ -70,7 +74,7 @@ services:
       dockerfile: apps/identity/Dockerfile
     container_name: edna-identity
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
     depends_on:
@@ -86,7 +90,7 @@ services:
       dockerfile: apps/semantic/Dockerfile
     container_name: edna-semantic
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
     ports:
@@ -104,12 +108,12 @@ services:
       dockerfile: apps/identity-worker/Dockerfile
     container_name: edna-identity-worker
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-edna}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edna}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB:-edna}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
     depends_on:
