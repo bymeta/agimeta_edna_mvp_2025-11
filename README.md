@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Enterprise DNA
 
 A monorepo platform for managing golden business objects, events, and identity matching rules.
@@ -463,4 +464,3 @@ enterprise-dna/
 ## License
 
 Internal use only.
-
