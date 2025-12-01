@@ -1,0 +1,12 @@
+# Root requirements for local development
+# Install shared package first, then services
+
+# Shared package
+-e packages/edna-common
+
+# Services (install as needed)
+-e apps/api-gateway
+-e apps/scanner
+-e apps/identity
+-e apps/semantic
+

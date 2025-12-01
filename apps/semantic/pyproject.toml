@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semantic"
+version = "0.1.0"
+description = "Simple glossary CRUD service"
+requires-python = ">=3.11"
+dependencies = [
+    "edna-common",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "psycopg2-binary>=2.9.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+]
+

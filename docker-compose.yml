@@ -1,0 +1,128 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: edna-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-edna}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edna}
+      POSTGRES_DB: ${POSTGRES_DB:-edna}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edna}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - edna-network
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: apps/api-gateway/Dockerfile
+    container_name: edna-api-gateway
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-edna}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edna}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-edna}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      API_GATEWAY_HOST: 0.0.0.0
+      API_GATEWAY_PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    ports:
+      - "${API_GATEWAY_PORT:-8000}:8000"
+    volumes:
+      - ./infra:/app/infra:ro
+      - ./scripts:/app/scripts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - edna-network
+    restart: unless-stopped
+
+  scanner:
+    build:
+      context: .
+      dockerfile: apps/scanner/Dockerfile
+    container_name: edna-scanner
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - edna-network
+    restart: "no"  # Run as job
+
+  identity:
+    build:
+      context: .
+      dockerfile: apps/identity/Dockerfile
+    container_name: edna-identity
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - edna-network
+    restart: "no"  # Run as job, not as persistent service
+
+  semantic:
+    build:
+      context: .
+      dockerfile: apps/semantic/Dockerfile
+    container_name: edna-semantic
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    ports:
+      - "${SEMANTIC_PORT:-8002}:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - edna-network
+    restart: unless-stopped
+
+  identity-worker:
+    build:
+      context: .
+      dockerfile: apps/identity-worker/Dockerfile
+    container_name: edna-identity-worker
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-edna}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edna}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-edna}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edna}:${POSTGRES_PASSWORD:-edna}@postgres:5432/${POSTGRES_DB:-edna}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - edna-network
+    restart: "no"  # Run as job
+
+networks:
+  edna-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+
